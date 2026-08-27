@@ -1,6 +1,10 @@
 from app.models import User, RoleEnum
 
 
+# =========================================================
+# Helper Functions
+# =========================================================
+
 def get_token(client, username, password):
     response = client.post(
         "/auth/login",
@@ -44,7 +48,12 @@ def register_user(client, username, password, role):
     return get_token(client, username, password)
 
 
-def create_student(client, token, roll_number="TEST001", email="test@example.com"):
+def create_student(
+    client,
+    token,
+    roll_number="TEST001",
+    email="test@example.com",
+):
     response = client.post(
         "/students/",
         json={
@@ -129,15 +138,18 @@ def create_report_data(client):
     return admin_token, teacher_token, student_id
 
 
-# -------------------------
+# =========================================================
 # Authentication Tests
-# -------------------------
+# =========================================================
 
 def test_home(client):
     response = client.get("/")
 
     assert response.status_code == 200
-    assert response.json()["message"] == "Attendance Management System API is running"
+    assert (
+        response.json()["message"]
+        == "Attendance Management System API is running"
+    )
 
 
 def test_register_user(client):
@@ -205,9 +217,365 @@ def test_protected_endpoint_with_valid_token(client):
     assert response.status_code == 200
 
 
-# -------------------------
+# =========================================================
+# User Management Tests
+# =========================================================
+
+def test_admin_can_view_users(client):
+    register_user(
+        client,
+        "admin",
+        "admin123",
+        "ADMIN",
+    )
+
+    register_user(
+        client,
+        "teacher1",
+        "teacher123",
+        "TEACHER",
+    )
+
+    admin_token = get_token(
+        client,
+        "admin",
+        "admin123",
+    )
+
+    response = client.get(
+        "/users/",
+        headers={
+            "Authorization": f"Bearer {admin_token}",
+        },
+    )
+
+    assert response.status_code == 200
+    assert len(response.json()) >= 2
+
+
+def test_teacher_cannot_view_users(client):
+    register_user(
+        client,
+        "teacher1",
+        "teacher123",
+        "TEACHER",
+    )
+
+    teacher_token = get_token(
+        client,
+        "teacher1",
+        "teacher123",
+    )
+
+    response = client.get(
+        "/users/",
+        headers={
+            "Authorization": f"Bearer {teacher_token}",
+        },
+    )
+
+    assert response.status_code == 403
+
+
+def test_principal_cannot_view_users(client):
+    register_user(
+        client,
+        "principal",
+        "principal123",
+        "PRINCIPAL",
+    )
+
+    principal_token = get_token(
+        client,
+        "principal",
+        "principal123",
+    )
+
+    response = client.get(
+        "/users/",
+        headers={
+            "Authorization": f"Bearer {principal_token}",
+        },
+    )
+
+    assert response.status_code == 403
+
+
+def test_admin_can_create_user(client):
+    register_user(
+        client,
+        "admin",
+        "admin123",
+        "ADMIN",
+    )
+
+    admin_token = get_token(
+        client,
+        "admin",
+        "admin123",
+    )
+
+    response = client.post(
+        "/users/",
+        json={
+            "username": "newteacher",
+            "password": "teacher123",
+            "role": "TEACHER",
+        },
+        headers={
+            "Authorization": f"Bearer {admin_token}",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["message"] == "User created successfully"
+    assert response.json()["username"] == "newteacher"
+    assert response.json()["role"] == "TEACHER"
+
+
+def test_teacher_cannot_create_user(client):
+    register_user(
+        client,
+        "teacher1",
+        "teacher123",
+        "TEACHER",
+    )
+
+    teacher_token = get_token(
+        client,
+        "teacher1",
+        "teacher123",
+    )
+
+    response = client.post(
+        "/users/",
+        json={
+            "username": "newteacher",
+            "password": "teacher123",
+            "role": "TEACHER",
+        },
+        headers={
+            "Authorization": f"Bearer {teacher_token}",
+        },
+    )
+
+    assert response.status_code == 403
+
+
+def test_principal_cannot_create_user(client):
+    register_user(
+        client,
+        "principal",
+        "principal123",
+        "PRINCIPAL",
+    )
+
+    principal_token = get_token(
+        client,
+        "principal",
+        "principal123",
+    )
+
+    response = client.post(
+        "/users/",
+        json={
+            "username": "newteacher",
+            "password": "teacher123",
+            "role": "TEACHER",
+        },
+        headers={
+            "Authorization": f"Bearer {principal_token}",
+        },
+    )
+
+    assert response.status_code == 403
+
+
+def test_admin_cannot_create_duplicate_user(client):
+    register_user(
+        client,
+        "admin",
+        "admin123",
+        "ADMIN",
+    )
+
+    register_user(
+        client,
+        "teacher1",
+        "teacher123",
+        "TEACHER",
+    )
+
+    admin_token = get_token(
+        client,
+        "admin",
+        "admin123",
+    )
+
+    response = client.post(
+        "/users/",
+        json={
+            "username": "teacher1",
+            "password": "another123",
+            "role": "TEACHER",
+        },
+        headers={
+            "Authorization": f"Bearer {admin_token}",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Username already exists"
+
+
+def test_admin_can_delete_user(client):
+    register_user(
+        client,
+        "admin",
+        "admin123",
+        "ADMIN",
+    )
+
+    register_user(
+        client,
+        "teacher1",
+        "teacher123",
+        "TEACHER",
+    )
+
+    admin_token = get_token(
+        client,
+        "admin",
+        "admin123",
+    )
+
+    users_response = client.get(
+        "/users/",
+        headers={
+            "Authorization": f"Bearer {admin_token}",
+        },
+    )
+
+    users = users_response.json()
+
+    teacher = next(
+        user
+        for user in users
+        if user["username"] == "teacher1"
+    )
+
+    response = client.delete(
+        f"/users/{teacher['id']}",
+        headers={
+            "Authorization": f"Bearer {admin_token}",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["message"] == "User deleted successfully"
+
+
+def test_teacher_cannot_delete_user(client):
+    register_user(
+        client,
+        "teacher1",
+        "teacher123",
+        "TEACHER",
+    )
+
+    register_user(
+        client,
+        "teacher2",
+        "teacher456",
+        "TEACHER",
+    )
+
+    teacher_token = get_token(
+        client,
+        "teacher1",
+        "teacher123",
+    )
+
+    users_response = client.get(
+        "/users/",
+        headers={
+            "Authorization": f"Bearer {teacher_token}",
+        },
+    )
+
+    # Teacher should not even be able to access the user list.
+    assert users_response.status_code == 403
+
+
+def test_admin_cannot_delete_self(client):
+    register_user(
+        client,
+        "admin",
+        "admin123",
+        "ADMIN",
+    )
+
+    admin_token = get_token(
+        client,
+        "admin",
+        "admin123",
+    )
+
+    users_response = client.get(
+        "/users/",
+        headers={
+            "Authorization": f"Bearer {admin_token}",
+        },
+    )
+
+    admin_user = next(
+        user
+        for user in users_response.json()
+        if user["username"] == "admin"
+    )
+
+    response = client.delete(
+        f"/users/{admin_user['id']}",
+        headers={
+            "Authorization": f"Bearer {admin_token}",
+        },
+    )
+
+    assert response.status_code == 400
+    assert (
+        response.json()["detail"]
+        == "Admin cannot delete their own account"
+    )
+
+
+def test_user_not_found(client):
+    register_user(
+        client,
+        "admin",
+        "admin123",
+        "ADMIN",
+    )
+
+    admin_token = get_token(
+        client,
+        "admin",
+        "admin123",
+    )
+
+    response = client.delete(
+        "/users/99999",
+        headers={
+            "Authorization": f"Bearer {admin_token}",
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "User not found"
+
+
+# =========================================================
 # Student Management Tests
-# -------------------------
+# =========================================================
 
 def test_admin_can_create_student(client):
     token = register_user(
@@ -503,9 +871,9 @@ def test_student_not_found(client):
     assert response.status_code == 404
 
 
-# -------------------------
+# =========================================================
 # Attendance Management Tests
-# -------------------------
+# =========================================================
 
 def test_teacher_can_mark_attendance(client):
     teacher_token = register_user(
@@ -828,7 +1196,10 @@ def test_duplicate_attendance_not_allowed(client):
     )
 
     assert second_response.status_code == 400
-    assert second_response.json()["detail"] == "Attendance already marked for this date"
+    assert (
+        second_response.json()["detail"]
+        == "Attendance already marked for this date"
+    )
 
 
 def test_attendance_record_not_found(client):
@@ -864,9 +1235,9 @@ def test_attendance_record_not_found(client):
     assert response.json()["detail"] == "Record not found"
 
 
-# -------------------------
+# =========================================================
 # Attendance Report Tests
-# -------------------------
+# =========================================================
 
 def test_teacher_can_generate_report(client):
     _, teacher_token, student_id = create_report_data(client)
@@ -1163,7 +1534,10 @@ def test_principal_can_reject_report(client):
 
     assert response.status_code == 200
     assert response.json()["status"] == "REJECTED"
-    assert response.json()["remarks"] == "Attendance percentage needs verification"
+    assert (
+        response.json()["remarks"]
+        == "Attendance percentage needs verification"
+    )
     assert response.json()["approved_by"] is not None
 
 
