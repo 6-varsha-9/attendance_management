@@ -44,13 +44,13 @@ def register_user(client, username, password, role):
     return get_token(client, username, password)
 
 
-def create_student(client, token):
+def create_student(client, token, roll_number="TEST001", email="test@example.com"):
     response = client.post(
         "/students/",
         json={
             "name": "Test Student",
-            "roll_number": "TEST001",
-            "email": "test@example.com",
+            "roll_number": roll_number,
+            "email": email,
         },
         headers={
             "Authorization": f"Bearer {token}",
@@ -60,6 +60,73 @@ def create_student(client, token):
     assert response.status_code == 200
 
     return response.json()["id"]
+
+
+def create_attendance(client, token, student_id, date, status):
+    response = client.post(
+        "/attendance/",
+        json={
+            "student_id": student_id,
+            "date": date,
+            "status": status,
+        },
+        headers={
+            "Authorization": f"Bearer {token}",
+        },
+    )
+
+    assert response.status_code == 200
+
+    return response.json()["id"]
+
+
+def create_report_data(client):
+    admin_token = register_user(
+        client,
+        "admin",
+        "admin123",
+        "ADMIN",
+    )
+
+    teacher_token = register_user(
+        client,
+        "teacher1",
+        "teacher123",
+        "TEACHER",
+    )
+
+    student_id = create_student(
+        client,
+        admin_token,
+        "REPORT001",
+        "report@example.com",
+    )
+
+    create_attendance(
+        client,
+        teacher_token,
+        student_id,
+        "2026-08-25",
+        "PRESENT",
+    )
+
+    create_attendance(
+        client,
+        teacher_token,
+        student_id,
+        "2026-08-26",
+        "PRESENT",
+    )
+
+    create_attendance(
+        client,
+        teacher_token,
+        student_id,
+        "2026-08-27",
+        "ABSENT",
+    )
+
+    return admin_token, teacher_token, student_id
 
 
 # -------------------------
@@ -795,3 +862,375 @@ def test_attendance_record_not_found(client):
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Record not found"
+
+
+# -------------------------
+# Attendance Report Tests
+# -------------------------
+
+def test_teacher_can_generate_report(client):
+    _, teacher_token, student_id = create_report_data(client)
+
+    response = client.post(
+        f"/reports/generate/{student_id}",
+        headers={
+            "Authorization": f"Bearer {teacher_token}",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["student_id"] == student_id
+
+
+def test_admin_can_generate_report(client):
+    admin_token, _, student_id = create_report_data(client)
+
+    response = client.post(
+        f"/reports/generate/{student_id}",
+        headers={
+            "Authorization": f"Bearer {admin_token}",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["student_id"] == student_id
+
+
+def test_principal_cannot_generate_report(client):
+    admin_token = register_user(
+        client,
+        "admin",
+        "admin123",
+        "ADMIN",
+    )
+
+    teacher_token = register_user(
+        client,
+        "teacher1",
+        "teacher123",
+        "TEACHER",
+    )
+
+    principal_token = register_user(
+        client,
+        "principal",
+        "principal123",
+        "PRINCIPAL",
+    )
+
+    student_id = create_student(
+        client,
+        admin_token,
+        "REPORT001",
+        "report@example.com",
+    )
+
+    create_attendance(
+        client,
+        teacher_token,
+        student_id,
+        "2026-08-27",
+        "PRESENT",
+    )
+
+    response = client.post(
+        f"/reports/generate/{student_id}",
+        headers={
+            "Authorization": f"Bearer {principal_token}",
+        },
+    )
+
+    assert response.status_code == 403
+
+
+def test_report_calculates_attendance_correctly(client):
+    admin_token, teacher_token, student_id = create_report_data(client)
+
+    response = client.post(
+        f"/reports/generate/{student_id}",
+        headers={
+            "Authorization": f"Bearer {teacher_token}",
+        },
+    )
+
+    assert response.status_code == 200
+
+    data = response.json()
+
+    assert data["total_classes"] == 3
+    assert data["present"] == 2
+    assert data["absent"] == 1
+    assert data["percentage"] == 66.67
+    assert data["status"] == "PENDING"
+
+
+def test_report_without_attendance_returns_404(client):
+    admin_token = register_user(
+        client,
+        "admin",
+        "admin123",
+        "ADMIN",
+    )
+
+    student_id = create_student(
+        client,
+        admin_token,
+        "EMPTY001",
+        "empty@example.com",
+    )
+
+    response = client.post(
+        f"/reports/generate/{student_id}",
+        headers={
+            "Authorization": f"Bearer {admin_token}",
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "No attendance records found"
+
+
+def test_admin_can_view_reports(client):
+    admin_token, _, student_id = create_report_data(client)
+
+    client.post(
+        f"/reports/generate/{student_id}",
+        headers={
+            "Authorization": f"Bearer {admin_token}",
+        },
+    )
+
+    response = client.get(
+        "/reports/",
+        headers={
+            "Authorization": f"Bearer {admin_token}",
+        },
+    )
+
+    assert response.status_code == 200
+    assert len(response.json()) == 1
+
+
+def test_principal_can_view_reports(client):
+    admin_token, teacher_token, student_id = create_report_data(client)
+
+    client.post(
+        f"/reports/generate/{student_id}",
+        headers={
+            "Authorization": f"Bearer {teacher_token}",
+        },
+    )
+
+    principal_token = register_user(
+        client,
+        "principal",
+        "principal123",
+        "PRINCIPAL",
+    )
+
+    response = client.get(
+        "/reports/",
+        headers={
+            "Authorization": f"Bearer {principal_token}",
+        },
+    )
+
+    assert response.status_code == 200
+    assert len(response.json()) == 1
+
+
+def test_teacher_cannot_view_reports(client):
+    teacher_token = register_user(
+        client,
+        "teacher1",
+        "teacher123",
+        "TEACHER",
+    )
+
+    response = client.get(
+        "/reports/",
+        headers={
+            "Authorization": f"Bearer {teacher_token}",
+        },
+    )
+
+    assert response.status_code == 403
+
+
+def test_principal_can_approve_report(client):
+    admin_token, teacher_token, student_id = create_report_data(client)
+
+    create_response = client.post(
+        f"/reports/generate/{student_id}",
+        headers={
+            "Authorization": f"Bearer {teacher_token}",
+        },
+    )
+
+    report_id = create_response.json()["id"]
+
+    principal_token = register_user(
+        client,
+        "principal",
+        "principal123",
+        "PRINCIPAL",
+    )
+
+    response = client.put(
+        f"/reports/{report_id}/approve",
+        headers={
+            "Authorization": f"Bearer {principal_token}",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "APPROVED"
+    assert response.json()["approved_by"] is not None
+
+
+def test_admin_cannot_approve_report(client):
+    admin_token, teacher_token, student_id = create_report_data(client)
+
+    create_response = client.post(
+        f"/reports/generate/{student_id}",
+        headers={
+            "Authorization": f"Bearer {teacher_token}",
+        },
+    )
+
+    report_id = create_response.json()["id"]
+
+    response = client.put(
+        f"/reports/{report_id}/approve",
+        headers={
+            "Authorization": f"Bearer {admin_token}",
+        },
+    )
+
+    assert response.status_code == 403
+
+
+def test_teacher_cannot_approve_report(client):
+    _, teacher_token, student_id = create_report_data(client)
+
+    create_response = client.post(
+        f"/reports/generate/{student_id}",
+        headers={
+            "Authorization": f"Bearer {teacher_token}",
+        },
+    )
+
+    report_id = create_response.json()["id"]
+
+    response = client.put(
+        f"/reports/{report_id}/approve",
+        headers={
+            "Authorization": f"Bearer {teacher_token}",
+        },
+    )
+
+    assert response.status_code == 403
+
+
+def test_principal_can_reject_report(client):
+    admin_token, teacher_token, student_id = create_report_data(client)
+
+    create_response = client.post(
+        f"/reports/generate/{student_id}",
+        headers={
+            "Authorization": f"Bearer {teacher_token}",
+        },
+    )
+
+    report_id = create_response.json()["id"]
+
+    principal_token = register_user(
+        client,
+        "principal",
+        "principal123",
+        "PRINCIPAL",
+    )
+
+    response = client.put(
+        f"/reports/{report_id}/reject",
+        json={
+            "remarks": "Attendance percentage needs verification",
+        },
+        headers={
+            "Authorization": f"Bearer {principal_token}",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "REJECTED"
+    assert response.json()["remarks"] == "Attendance percentage needs verification"
+    assert response.json()["approved_by"] is not None
+
+
+def test_admin_cannot_reject_report(client):
+    admin_token, teacher_token, student_id = create_report_data(client)
+
+    create_response = client.post(
+        f"/reports/generate/{student_id}",
+        headers={
+            "Authorization": f"Bearer {teacher_token}",
+        },
+    )
+
+    report_id = create_response.json()["id"]
+
+    response = client.put(
+        f"/reports/{report_id}/reject",
+        json={
+            "remarks": "Test rejection",
+        },
+        headers={
+            "Authorization": f"Bearer {admin_token}",
+        },
+    )
+
+    assert response.status_code == 403
+
+
+def test_teacher_cannot_reject_report(client):
+    _, teacher_token, student_id = create_report_data(client)
+
+    create_response = client.post(
+        f"/reports/generate/{student_id}",
+        headers={
+            "Authorization": f"Bearer {teacher_token}",
+        },
+    )
+
+    report_id = create_response.json()["id"]
+
+    response = client.put(
+        f"/reports/{report_id}/reject",
+        json={
+            "remarks": "Test rejection",
+        },
+        headers={
+            "Authorization": f"Bearer {teacher_token}",
+        },
+    )
+
+    assert response.status_code == 403
+
+
+def test_report_not_found(client):
+    principal_token = register_user(
+        client,
+        "principal",
+        "principal123",
+        "PRINCIPAL",
+    )
+
+    response = client.put(
+        "/reports/999/approve",
+        headers={
+            "Authorization": f"Bearer {principal_token}",
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Report not found"
